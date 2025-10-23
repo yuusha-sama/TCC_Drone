@@ -3,18 +3,19 @@
 acoustic_mfcc_classes_nolibrosa.py — MFCC sem librosa/numba (compatível Python 3.14)
 
 Componentes:
-  - MFCCConfig, MFCCExtractorNL (implementa MFCC + Δ + ΔΔ via NumPy/SciPy)
-  - WAVRecorder, WAVDataset (iguais à versão anterior)
+  - MFCCConfig, MFCCExtractorNL (MFCC + Δ + ΔΔ via NumPy/SciPy)
+  - WAVRecorder, WAVDataset
   - ModelTrainer (SVM + StandardScaler)
   - LiveAudioClassifier (tempo real com votação)
+  - CLI: record / extract / train / eval / live
 
-Dependências somente: numpy, scipy, soundfile, sounddevice, pandas, scikit-learn, joblib
-
-Uso rápido está nos comentários ao final.
+Dependências: numpy, scipy, soundfile, sounddevice, pandas, scikit-learn, joblib
 """
+
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
+import argparse
 import queue
 import time
 import sys
@@ -31,6 +32,7 @@ except Exception as e:
 
 from scipy.fft import rfft
 from scipy.signal import get_window
+from scipy.fftpack import dct
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
@@ -50,12 +52,9 @@ def mel_to_hz(m: np.ndarray | float) -> np.ndarray:
     return 700.0 * (10**(m/2595.0) - 1.0)
 
 def mel_filterbank(sr: int, n_fft: int, n_mels: int, fmin: float, fmax: float) -> np.ndarray:
-    # número de bins úteis na rFFT
     n_bins = n_fft//2 + 1
-    # pontos em mel
     mels = np.linspace(hz_to_mel(fmin), hz_to_mel(fmax), n_mels+2)
     hz = mel_to_hz(mels)
-    # mapeia para bins de frequência
     bins = np.floor((n_fft+1) * hz / sr).astype(int)
     fb = np.zeros((n_mels, n_bins), dtype=np.float32)
     for i in range(1, n_mels+1):
@@ -64,40 +63,32 @@ def mel_filterbank(sr: int, n_fft: int, n_mels: int, fmin: float, fmax: float) -
             center += 1
         if right == center:
             right += 1
-        # subida
         for j in range(left, center):
             if 0 <= j < n_bins:
                 fb[i-1, j] = (j - left) / max(1, (center - left))
-        # descida
         for j in range(center, right):
             if 0 <= j < n_bins:
                 fb[i-1, j] = (right - j) / max(1, (right - center))
-    # normalização energética (Slaney-like)
     fb = fb / (np.sum(fb, axis=1, keepdims=True) + 1e-12)
     return fb
 
-from scipy.fftpack import dct
-
 def mfcc_from_signal(y: np.ndarray, sr: int, n_mfcc: int=20, n_fft: int=1024, hop_length: int=512,
-                      n_mels: int=40, fmin: float=50.0, fmax: float=4000.0, pre_emph: float=0.97) -> np.ndarray:
-    # mono + normalização leve
+                     n_mels: int=40, fmin: float=50.0, fmax: float=4000.0, pre_emph: float=0.97) -> np.ndarray:
     if y.ndim > 1:
         y = np.mean(y, axis=1)
     y = np.asarray(y, dtype=np.float32)
     mx = np.max(np.abs(y))
     if mx > 0:
         y = y / mx
-    # pré-ênfase
-    y[1:] = y[1:] - pre_emph * y[:-1]
-    # framing com hop
+    y = np.copy(y)
+    if len(y) > 1:
+        y[1:] = y[1:] - pre_emph * y[:-1]
     win = get_window('hann', n_fft, fftbins=True).astype(np.float32)
     n_frames = 1 + max(0, (len(y) - n_fft) // hop_length)
     if n_frames <= 0:
-        # pad até ter 1 frame
         pad = np.zeros(n_fft - len(y) + 1, dtype=np.float32)
         y = np.concatenate([y, pad])
         n_frames = 1
-    # filtro mel
     fb = mel_filterbank(sr, n_fft, n_mels, fmin, fmax)
     S = np.empty((n_mels, n_frames), dtype=np.float32)
     for i in range(n_frames):
@@ -105,16 +96,14 @@ def mfcc_from_signal(y: np.ndarray, sr: int, n_mfcc: int=20, n_fft: int=1024, ho
         frame = y[s:s+n_fft]
         if len(frame) < n_fft:
             frame = np.pad(frame, (0, n_fft-len(frame)))
-        X = np.abs(rfft(frame * win))**2  # potência
+        X = np.abs(rfft(frame * win))**2
         melE = fb @ X[:n_fft//2 + 1]
         S[:, i] = np.log(melE + 1e-12)
-    # DCT-II ao longo de mels → MFCCs
-    C = dct(S, type=2, axis=0, norm='ortho')  # shape: (n_mels, T)
-    C = C[:n_mfcc, :]  # pega os primeiros coeficientes
-    return C  # (n_mfcc, T)
+    C = dct(S, type=2, axis=0, norm='ortho')
+    C = C[:n_mfcc, :]
+    return C
 
 def deltas(M: np.ndarray, order: int = 1, width: int = 9) -> np.ndarray:
-    # derivada temporal simples (Janela ímpar)
     assert width % 2 == 1
     half = width//2
     denom = 2 * sum([i*i for i in range(1, half+1)])
@@ -149,15 +138,17 @@ class MFCCExtractorNL:
     def __init__(self, cfg: MFCCConfig):
         self.cfg = cfg
     def _matrix(self, y: np.ndarray) -> np.ndarray:
-        C = mfcc_from_signal(y, sr=self.cfg.sr, n_mfcc=self.cfg.n_mfcc, n_fft=self.cfg.n_fft,
-                             hop_length=self.cfg.hop_length, n_mels=self.cfg.n_mels,
-                             fmin=self.cfg.fmin, fmax=self.cfg.fmax)
+        C = mfcc_from_signal(
+            y, sr=self.cfg.sr, n_mfcc=self.cfg.n_mfcc, n_fft=self.cfg.n_fft,
+            hop_length=self.cfg.hop_length, n_mels=self.cfg.n_mels,
+            fmin=self.cfg.fmin, fmax=self.cfg.fmax
+        )
         mats = [C]
         if self.cfg.use_deltas:
             d1 = deltas(C, order=1)
             d2 = deltas(C, order=2)
             mats += [d1, d2]
-        return np.vstack(mats)  # (n_feats, T)
+        return np.vstack(mats)
     def vectorize(self, y: np.ndarray) -> np.ndarray:
         F = self._matrix(y)
         if self.cfg.stats == "meanstd":
@@ -170,7 +161,6 @@ class MFCCExtractorNL:
     def wav_to_vector(self, wav_path: Path) -> np.ndarray:
         y, sr = sf.read(str(wav_path), dtype='float32', always_2d=False)
         if sr != self.cfg.sr:
-            # simples reamostragem linear (para evitar dependência externa); para melhor qualidade, use resampy/samplerate
             ratio = self.cfg.sr / sr
             x_idx = np.arange(0, len(y))
             t_idx = np.arange(0, len(y)*ratio, 1.0)
@@ -349,30 +339,113 @@ class LiveAudioClassifier:
                 print("[live] encerrado")
 
 # =========================
-# Exemplo de uso (colar/rodar conforme necessidade)
+# CLI (record / extract / train / eval / live)
 # =========================
+
+def build_cli():
+    p = argparse.ArgumentParser(description="Acoustic MFCC (no-librosa) — coleta, treino e live")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    r = sub.add_parser("record", help="Gravar WAVs rotulados do microfone")
+    r.add_argument("--label", required=True, help="ex.: drone ou other")
+    r.add_argument("--outdir", type=Path, required=True)
+    r.add_argument("--minutes", type=float, default=1.0)
+    r.add_argument("--chunk-sec", type=float, default=5.0)
+    r.add_argument("--sr", type=int, default=16000)
+    r.add_argument("--device", type=int, default=None)
+
+    e = sub.add_parser("extract", help="Extrair MFCCs e gerar dataset.csv")
+    e.add_argument("--indir", type=Path, required=True, help="pasta com subpastas por rótulo (data/...)")
+    e.add_argument("--outcsv", type=Path, required=True)
+    e.add_argument("--sr", type=int, default=16000)
+    e.add_argument("--n-mfcc", type=int, default=20)
+    e.add_argument("--n-fft", type=int, default=1024)
+    e.add_argument("--hop", type=int, default=512)
+    e.add_argument("--n-mels", type=int, default=40)
+    e.add_argument("--fmin", type=float, default=50.0)
+    e.add_argument("--fmax", type=float, default=4000.0)
+    e.add_argument("--no-deltas", action="store_true", help="não usar Δ/ΔΔ")
+    e.add_argument("--stats", choices=["meanstd","mean"], default="meanstd")
+
+    t = sub.add_parser("train", help="Treinar e salvar scaler/modelo")
+    t.add_argument("--csv", type=Path, required=True)
+    t.add_argument("--scaler", type=Path, required=True)
+    t.add_argument("--model", type=Path, required=True)
+    t.add_argument("--test-size", type=float, default=0.2)
+    t.add_argument("--kfold", type=int, default=5)
+
+    v = sub.add_parser("eval", help="Avaliar um modelo salvo em um dataset")
+    v.add_argument("--csv", type=Path, required=True)
+    v.add_argument("--scaler", type=Path, required=True)
+    v.add_argument("--model", type=Path, required=True)
+
+    l = sub.add_parser("live", help="Inferência em tempo real pelo microfone")
+    l.add_argument("--scaler", type=Path, required=True)
+    l.add_argument("--model", type=Path, required=True)
+    l.add_argument("--sr", type=int, default=16000)
+    l.add_argument("--n-mfcc", type=int, default=20)
+    l.add_argument("--n-fft", type=int, default=1024)
+    l.add_argument("--hop", type=int, default=512)
+    l.add_argument("--n-mels", type=int, default=40)
+    l.add_argument("--fmin", type=float, default=50.0)
+    l.add_argument("--fmax", type=float, default=4000.0)
+    l.add_argument("--no-deltas", action="store_true")
+    l.add_argument("--stats", choices=["meanstd","mean"], default="meanstd")
+    l.add_argument("--frame-sec", type=float, default=1.0)
+    l.add_argument("--hop-sec", type=float, default=0.25)
+    l.add_argument("--device", type=int, default=None)
+    l.add_argument("--vote", type=int, default=4)
+
+    return p
+
+def main(argv=None):
+    args = build_cli().parse_args(argv)
+
+    if args.cmd == "record":
+        WAVRecorder(sr=args.sr, device=args.device).record_chunks(
+            label=args.label, outdir=args.outdir, minutes=args.minutes, chunk_sec=args.chunk_sec
+        )
+
+    elif args.cmd == "extract":
+        cfg = MFCCConfig(
+            sr=args.sr, n_mfcc=args.n_mfcc, n_fft=args.n_fft, hop_length=args.hop,
+            n_mels=args.n_mels, fmin=args.fmin, fmax=args.fmax,
+            use_deltas=(not args.no_deltas), stats=args.stats
+        )
+        ext = MFCCExtractorNL(cfg)
+        ds = WAVDataset(args.indir, ext)
+        ds.to_csv(args.outcsv)
+
+    elif args.cmd == "train":
+        df = pd.read_csv(args.csv)
+        trainer = ModelTrainer()
+        metrics = trainer.fit(df, test_size=args.test_size, kfold=args.kfold)
+        print(metrics["report"])
+        print(metrics["cm"])
+        trainer.save(args.scaler, args.model)
+
+    elif args.cmd == "eval":
+        df = pd.read_csv(args.csv)
+        feat_cols = [c for c in df.columns if c.startswith("f")]
+        X = df[feat_cols].values.astype(np.float32)
+        y = df["label"].values
+        mt = ModelTrainer.load(args.scaler, args.model)
+        Xs = mt.scaler.transform(X)
+        yhat = mt.model.predict(Xs)
+        print("acc/f1:", accuracy_score(y, yhat), f1_score(y, yhat, average="weighted"))
+        print(classification_report(y, yhat))
+        print(confusion_matrix(y, yhat))
+
+    elif args.cmd == "live":
+        cfg = MFCCConfig(
+            sr=args.sr, n_mfcc=args.n_mfcc, n_fft=args.n_fft, hop_length=args.hop,
+            n_mels=args.n_mels, fmin=args.fmin, fmax=args.fmax,
+            use_deltas=(not args.no_deltas), stats=args.stats
+        )
+        ext = MFCCExtractorNL(cfg)
+        mt = ModelTrainer.load(args.scaler, args.model)
+        LiveAudioClassifier(mt, ext, frame_sec=args.frame_sec, hop_sec=args.hop_sec, device=args.device)\
+            .run(vote=args.vote)
+
 if __name__ == "__main__":
-    # 1) Coleta
-    # rec = WAVRecorder(sr=16000)
-    # rec.record_chunks('other', Path('data/other'), minutes=1.0, chunk_sec=5.0)
-    # rec.record_chunks('drone', Path('data/drone'), minutes=1.0, chunk_sec=5.0)
-
-    # 2) Dataset
-    cfg = MFCCConfig(sr=16000, n_mfcc=20)
-    ext = MFCCExtractorNL(cfg)
-    ds = WAVDataset(Path('data'), ext)
-    csv_path = ds.to_csv(Path('dataset.csv'))
-
-    # 3) Treino
-    df = pd.read_csv(csv_path)
-    trainer = ModelTrainer()
-    metrics = trainer.fit(df, test_size=0.2, kfold=5)
-    print("[metrics] acc=", metrics['acc'], "f1=", metrics['f1'])
-    print(metrics['report'])
-    print(metrics['cm'])
-    trainer.save(Path('scaler.pkl'), Path('model.pkl'))
-
-    # 4) Live
-    # trainer2 = ModelTrainer.load(Path('scaler.pkl'), Path('model.pkl'))
-    # live = LiveAudioClassifier(trainer2, ext, frame_sec=1.0, hop_sec=0.25)
-    # live.run(vote=4)
+    main()
