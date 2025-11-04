@@ -1,12 +1,10 @@
 from __future__ import annotations
 from typing import Callable, Optional, Dict, List
-import threading
-import queue
-import os
+import threading, queue, os
 import numpy as np
 import sounddevice as sd
 
-from .api import load_backend, classify_window  # uses features + keras backend
+from .api import load_backend, classify_window  # usa features + keras backend
 
 class AcousticNNModel:
     """Adaptador para modelo acústico pré-treinado (Keras)."""
@@ -22,6 +20,7 @@ class AcousticNNModel:
         idx_drone: Optional[int] = None,
         device_index: Optional[int] = None,
         threshold: float = 0.5,
+        debug: bool = False,
     ):
         self.backend = load_backend("keras", model_path)
         self.labels = self._load_labels(labels_path)
@@ -33,6 +32,7 @@ class AcousticNNModel:
         self.hop_s = hop_s
         self.device_index = device_index
         self.threshold = threshold
+        self.debug = debug
 
         self._q: "queue.Queue[np.ndarray]" = queue.Queue()
         self._thr: Optional[threading.Thread] = None
@@ -72,12 +72,15 @@ class AcousticNNModel:
 
     def _worker(self, on_result: Callable[[Dict[str, float]], None]):
         hop_len = int(self.sample_rate * self.hop_s)
+        if hop_len <= 0:
+            hop_len = max(1, int(self.sample_rate * 0.1))
         while not self._stop.is_set():
             try:
-                chunk = self._q.get(timeout=0.2)
+                chunk = self._q.get(timeout=0.5)
             except queue.Empty:
                 continue
 
+            # ring buffer
             if len(chunk) >= hop_len:
                 self._buf[:-hop_len] = self._buf[hop_len:]
                 self._buf[-hop_len:] = chunk[:hop_len]
@@ -85,16 +88,26 @@ class AcousticNNModel:
                 self._buf = np.roll(self._buf, -len(chunk))
                 self._buf[-len(chunk):] = chunk
 
-            res = self.classify_window(self._buf, sr=self.sample_rate)
-            on_result(res)
+            try:
+                res = self.classify_window(self._buf, sr=self.sample_rate)
+                if self.debug:
+                    rms = float(np.sqrt(np.mean(self._buf**2)))
+                    print(f"[DBG] rms={rms:.4f} probs={res.get('probs')}")
+                on_result(res)
+            except Exception as e:
+                print(f"[ERR] audio worker: {e}")
+                # continua rodando
 
     def start(self, on_result: Callable[[Dict[str, float]], None]) -> None:
         if self._thr is not None:
             raise RuntimeError("Já iniciado")
         self._stop.clear()
         self._stream = sd.InputStream(
-            samplerate=self.sample_rate, channels=1, dtype="float32",
-            callback=self._audio_cb, device=self.device_index
+            samplerate=self.sample_rate,
+            channels=1,
+            dtype="float32",
+            callback=self._audio_cb,
+            device=self.device_index,
         )
         self._stream.start()
         self._thr = threading.Thread(target=self._worker, args=(on_result,), daemon=True)
