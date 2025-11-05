@@ -179,19 +179,21 @@ class RFNode:
 # =========================
 
 class FusionEngine:
-    def __init__(self, state: SharedState, cfg: FusionConfig):
+    def __init__(self, state: SharedState, cfg: FusionConfig, hold_on_s: float = 1.5):
         self.state = state
         self.cfg = cfg
         self._ema_total: Optional[float] = None
         self._is_drone: bool = False
         self._cnt_on = 0
         self._cnt_off = 0
+        self._hold_on_s = float(hold_on_s)
+        self._hold_until: float = 0.0
 
     def step(self):
         p_audio, p_rf, _ = self.state.get()
-
         p_total = self.cfg.w_audio * p_audio + self.cfg.w_rf * p_rf
 
+        # suavização total
         if self._ema_total is None:
             self._ema_total = p_total
         else:
@@ -200,26 +202,29 @@ class FusionEngine:
 
         self.state.set_total(self._ema_total)
 
+        now = time.time()
+
+        # histerese + hold
         if self._ema_total >= self.cfg.threshold:
             self._cnt_on += 1
             self._cnt_off = 0
             if not self._is_drone and self._cnt_on >= self.cfg.min_confirm_on:
                 self._is_drone = True
+                self._hold_until = now + self._hold_on_s
                 self.on_event(True, self._ema_total)
+            elif self._is_drone:
+                # renova o hold enquanto estiver acima
+                self._hold_until = now + self._hold_on_s
         else:
             self._cnt_off += 1
             self._cnt_on = 0
-            if self._is_drone and self._cnt_off >= self.cfg.min_confirm_off:
-                self._is_drone = False
-                self.on_event(False, self._ema_total)
+            if self._is_drone:
+                # só desliga se passou do hold e acumulou confirmações de off
+                if now >= self._hold_until and self._cnt_off >= self.cfg.min_confirm_off:
+                    self._is_drone = False
+                    self.on_event(False, self._ema_total)
 
         print(f"[FUSION] p_audio={p_audio:.3f}  p_rf={p_rf:.3f}  p_total(EMA)={self._ema_total:.3f}  => {'DRONE' if self._is_drone else '---'}")
-
-    def on_event(self, is_drone: bool, score: float):
-        if is_drone:
-            print(f"[EVENT] DRONE DETECTADO (score={score:.3f})")
-        else:
-            print(f"[EVENT] Drone desapareceu (score={score:.3f})")
 
 
 # =========================
