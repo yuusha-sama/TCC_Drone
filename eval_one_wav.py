@@ -2,37 +2,35 @@
 # -*- coding: utf-8 -*-
 
 """
-eval_one_wav.py — Avalia um único arquivo WAV (ou todos os WAVs dentro de uma pasta)
-usando o modelo acústico Keras do seu TCC.
-
-Uso:
-  python eval_one_wav.py --model models/audio_classifier.keras --wav caminho/do/audio.wav
-  python eval_one_wav.py --model models/audio_classifier.keras --wav pasta/com/audios
+eval_one_wav_sliding_window.py — Avaliação avançada usando janelas deslizantes.
+Compatível com modelos binários (sigmoid).
+Mostra p(drone) por janela mas dá uma decisão final clara:
+    DRONE  ou  NÃO É DRONE
 """
 
 import argparse
-import os
 import numpy as np
 import soundfile as sf
 from pathlib import Path
 
-# Importando do seu projeto:
-from acoustic_models.api import classify_window
 from acoustic_models.keras_backend import KerasBackend
+from acoustic_models.features import logmel_spectrogram, ensure_mono_16k
 
 AUDIO_EXTS = {".wav", ".flac", ".ogg", ".m4a", ".mp3"}
 
+
+# ----------------------------------------------------------
+# Localizar arquivos
+# ----------------------------------------------------------
 
 def list_audio_files(path: str):
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Arquivo/pasta não encontrado: {path}")
 
-    # Caso seja arquivo único
     if p.is_file() and p.suffix.lower() in AUDIO_EXTS:
         return [p]
 
-    # Caso seja pasta
     if p.is_dir():
         files = []
         for fp in p.rglob("*"):
@@ -45,51 +43,105 @@ def list_audio_files(path: str):
     raise RuntimeError(f"Caminho inválido: {path}")
 
 
-def eval_file(model, wav_path, idx_drone=None):
-    """Avalia um único arquivo WAV e retorna p_drone."""
+# ----------------------------------------------------------
+# Avaliação por janelas deslizantes
+# ----------------------------------------------------------
+
+def eval_sliding_windows(model: KerasBackend, wav_path, threshold=0.6):
+    print("\n========================================")
+    print("🎧 Arquivo:", wav_path)
+    print("========================================")
+
     try:
         audio, sr = sf.read(wav_path, always_2d=False)
     except Exception as e:
         print(f"[ERRO] Falha ao ler {wav_path}: {e}")
         return None
 
-    res = classify_window(audio, sr, backend=model, idx_drone=idx_drone)
-    p = float(res.get("p_drone", 0.0))
+    # Normaliza para mono 16kHz
+    audio, sr = ensure_mono_16k(audio, sr)
 
-    print(f"\n📄 Arquivo: {wav_path}")
-    print(f"🎧 Probabilidade drone = {p:.4f}")
-    print(f"🔢 Todas as probabilidades = {res.get('probs')}")
+    # Log-mel
+    LM = logmel_spectrogram(audio, sr, n_fft=1024, hop_length=256, n_mels=64)
+    LM = (LM - LM.mean()) / (LM.std() + 1e-6)
 
-    return p
+    T_exp, F_exp = model.expected_tf()
 
+    # Ajuste bandas (F)
+    if F_exp is not None:
+        LM = LM[:, :F_exp]
+
+    T_total, F = LM.shape
+
+    if T_exp is None:
+        raise RuntimeError("O modelo não retornou T_exp.")
+
+    step = max(1, T_exp // 4)  # janelas com sobreposição
+    probs = []
+
+    # Percorrer log-mel inteiro
+    for start in range(0, max(1, T_total - T_exp + 1), step):
+        sub = LM[start:start+T_exp, :]
+
+        if sub.shape[0] < T_exp:
+            pad = np.zeros((T_exp, F), dtype=sub.dtype)
+            pad[:sub.shape[0]] = sub
+            sub = pad
+
+        X = sub[None, :, :, None]
+
+        # Inferência: binário → y = p(drone)
+        y = model.predict_proba(X)
+        y = np.squeeze(y).astype(float)
+        p_drone = float(y)
+        probs.append(p_drone)
+
+    # Mostrar janelas
+    print("\n🔎 p(drone) por janela:")
+    for i, p in enumerate(probs):
+        print(f"  janela {i:02d}: {p:.4f}")
+
+    # Cálculos finais
+    p_max = max(probs)
+    p_med = sum(probs) / len(probs)
+
+    # --------------------------------------------------
+    # DECISÃO FINAL
+    # --------------------------------------------------
+    is_drone = p_max >= threshold
+
+    print("\n📌 RESULTADO FINAL")
+    print("------------------------")
+    print(f"p(drone)_MAX = {p_max:.4f}")
+    print(f"p(drone)_MED = {p_med:.4f}")
+
+    if is_drone:
+        print(f"\n🎯 DECISÃO: **DRONE DETECTADO** (p={p_max:.4f})\n")
+    else:
+        print(f"\n🟦 DECISÃO: **NÃO É DRONE** (p={p_max:.4f})\n")
+
+    return is_drone
+
+
+# ----------------------------------------------------------
+# MAIN
+# ----------------------------------------------------------
 
 def main():
-    ap = argparse.ArgumentParser(description="Avaliação de um ou vários áudios WAV.")
-    ap.add_argument("--model", required=True, help="Caminho do modelo .keras/.h5")
-    ap.add_argument("--wav", required=True, help="Caminho do arquivo ou pasta de áudios")
-    ap.add_argument("--idx_drone", type=int, default=None, help="Índice da classe drone (opcional)")
-
+    ap = argparse.ArgumentParser(description="Avaliação com janelas deslizantes")
+    ap.add_argument("--model", required=True)
+    ap.add_argument("--wav", required=True)
+    ap.add_argument("--threshold", type=float, default=0.6)
     args = ap.parse_args()
 
     print("🔄 Carregando modelo Keras...")
     model = KerasBackend(args.model)
 
-    print("📁 Coletando arquivos...")
+    print("📁 Lendo arquivos...")
     files = list_audio_files(args.wav)
 
-    print(f"🎵 Encontrados {len(files)} arquivo(s) de áudio.\n")
-
-    results = []
-
     for fp in files:
-        p = eval_file(model, fp, idx_drone=args.idx_drone)
-        if p is not None:
-            results.append((fp, p))
-
-    if len(results) > 1:
-        print("\n============== RESUMO ==============")
-        for fp, p in results:
-            print(f"{fp.name:40s}  →  p(drone)={p:.4f}")
+        eval_sliding_windows(model, fp, threshold=args.threshold)
 
 
 if __name__ == "__main__":
