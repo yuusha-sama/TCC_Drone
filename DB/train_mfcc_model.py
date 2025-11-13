@@ -77,6 +77,7 @@ def treinar_modelo():
         max_depth=None,
         random_state=42,
         n_jobs=-1,
+        class_weight={"Drone": 2.0, "Unknown": 1.0},  # <-- peso maior pra Drone
     )
 
     clf.fit(X_train, y_train)
