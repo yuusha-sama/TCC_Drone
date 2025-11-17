@@ -63,7 +63,7 @@ def callback(indata, frames, time, status):
     # Decisão: média >= 0.30 OU prob atual >= 0.60
     if avg_prob >= DRONE_AVG_THRESHOLD or drone_prob >= DRONE_STRONG_THRESHOLD:
         print(
-            f"🚁 Drone detectado! "
+            f"Drone detectado! "
             f"(prob média: {avg_prob:.2f} | prob atual: {drone_prob:.2f})"
         )
     else:
