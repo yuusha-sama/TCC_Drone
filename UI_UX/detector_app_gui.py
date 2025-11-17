@@ -3,24 +3,29 @@
 # Implementar a interface gráfica principal do sistema de detecção:
 # - painel à esquerda para o canal RF
 # - painel à direita para o canal acústico
+# - painel de fusão de sensores logo abaixo
 # - três botões de controle:
 #     * iniciar/parar RF
 #     * iniciar/parar acústico
 #     * iniciar/parar ambos
 # - log de mensagens na parte inferior
-#
-# Esta camada utiliza:
-# - AcousticDetector (acústico), definido em acoustic_detector_core.py
-# - RFDetectorStub (RF), definido em rf_detector_stub.py
 
 from pathlib import Path
 import threading
+import sys
 
 import tkinter as tk
 from tkinter import ttk, messagebox
 
 from acoustic_detector_core import AcousticDetector
 from rf_detector_stub import RFDetectorStub
+
+# Ajustar sys.path para importar sensor_fusion_core na raiz do projeto
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from sensor_fusion_core import SensorFusionEngine  # noqa: E402
 
 
 class DetectorAppGUI:
@@ -31,18 +36,26 @@ class DetectorAppGUI:
     - parte superior: dois painéis lado a lado
         * painel esquerdo: RF
         * painel direito: acústico
-    - linha de botões: RF, Acústico, Ambos
+    - abaixo: painel de fusão de sensores
+    - abaixo: linha de botões (RF, acústico, ambos)
     - parte inferior: log de mensagens
     """
 
-    def __init__(self, root: tk.Tk, acoustic_detector: AcousticDetector, rf_detector: RFDetectorStub) -> None:
+    def __init__(
+        self,
+        root: tk.Tk,
+        acoustic_detector: AcousticDetector,
+        rf_detector: RFDetectorStub,
+        fusion_engine: SensorFusionEngine,
+    ) -> None:
         self.root = root
         self.acoustic_detector = acoustic_detector
         self.rf_detector = rf_detector
+        self.fusion_engine = fusion_engine
 
         # Configurar janela principal
         self.root.title("Sistema de Detecção de Drones - Interface Gráfica")
-        self.root.geometry("900x500")
+        self.root.geometry("900x550")
         self.root.resizable(False, False)
 
         # Criar elementos da interface
@@ -58,11 +71,11 @@ class DetectorAppGUI:
         """
         Criar e organizar todos os elementos visuais da interface.
         """
-        # Frame principal, com dois painéis lado a lado
+        # Parte superior: RF (esquerda) e acústico (direita)
         top_frame = ttk.Frame(self.root, padding=(10, 10))
         top_frame.pack(fill="both", expand=True)
 
-        # Painel RF (esquerda)
+        # Painel RF
         rf_frame = ttk.LabelFrame(top_frame, text="Canal RF", padding=(10, 10))
         rf_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
 
@@ -74,23 +87,25 @@ class DetectorAppGUI:
         )
         self.rf_state_label.pack(anchor="w", pady=(0, 10))
 
-        self.rf_value_label = ttk.Label(
+        self.rf_prob_label = ttk.Label(
             rf_frame,
-            text="Métrica RF: 0.00",
+            text="Probabilidade de drone (RF): 0.00",
             font=("Segoe UI", 10),
         )
-        self.rf_value_label.pack(anchor="w")
+        self.rf_prob_label.pack(anchor="w")
 
         self.rf_status_detail_label = ttk.Label(
             rf_frame,
-            text="RF aguardando implementação de hardware.",
+            text="RF aguardando integração com hardware e pipeline RF.",
             font=("Segoe UI", 9),
             wraplength=400,
         )
         self.rf_status_detail_label.pack(anchor="w", pady=(5, 0))
 
-        # Painel acústico (direita)
-        ac_frame = ttk.LabelFrame(top_frame, text="Canal acústico", padding=(10, 10))
+        # Painel acústico
+        ac_frame = ttk.LabelFrame(
+            top_frame, text="Canal acústico", padding=(10, 10)
+        )
         ac_frame.pack(side="left", fill="both", expand=True, padx=(5, 0))
 
         self.ac_state_label = ttk.Label(
@@ -132,7 +147,35 @@ class DetectorAppGUI:
         )
         self.ac_prob_progress.pack(fill="x", pady=(5, 0))
 
-        # Linha de botões (RF, Acústico, Ambos)
+        # Painel de fusão de sensores
+        fusion_frame = ttk.LabelFrame(
+            self.root, text="Fusão de sensores (decisão final)", padding=(10, 5)
+        )
+        fusion_frame.pack(fill="x", padx=10)
+
+        self.fusion_state_label = ttk.Label(
+            fusion_frame,
+            text="Fusão parada",
+            font=("Segoe UI", 12, "bold"),
+            foreground="gray",
+        )
+        self.fusion_state_label.pack(anchor="w")
+
+        self.fusion_prob_label = ttk.Label(
+            fusion_frame,
+            text="Probabilidade fundida de drone: 0.00",
+            font=("Segoe UI", 10),
+        )
+        self.fusion_prob_label.pack(anchor="w", pady=(2, 0))
+
+        self.fusion_source_label = ttk.Label(
+            fusion_frame,
+            text="Origem atual: nenhum canal ativo.",
+            font=("Segoe UI", 9),
+        )
+        self.fusion_source_label.pack(anchor="w", pady=(2, 0))
+
+        # Linha de botões
         controls_frame = ttk.Frame(self.root, padding=(10, 5))
         controls_frame.pack(fill="x")
 
@@ -240,10 +283,11 @@ class DetectorAppGUI:
         - se qualquer um dos dois estiver ligado, a ação é desligar os dois
         - se ambos estiverem desligados, a ação é ligar os dois
         """
-        running_any = self.rf_detector.is_running() or self.acoustic_detector.is_running()
+        running_any = (
+            self.rf_detector.is_running() or self.acoustic_detector.is_running()
+        )
 
         if running_any:
-            # Parar ambos
             if self.rf_detector.is_running():
                 self.rf_detector.stop()
             if self.acoustic_detector.is_running():
@@ -253,28 +297,28 @@ class DetectorAppGUI:
             self.btn_acoustic.configure(text="Iniciar acústico")
             self.btn_both.configure(text="Iniciar ambos")
         else:
-            # Iniciar ambos
             self._toggle_rf()
             self._toggle_acoustic()
             self.btn_both.configure(text="Parar ambos")
 
     def _update_panels(self) -> None:
         """
-        Atualizar os painéis RF e acústico com as métricas mais recentes.
+        Atualizar os painéis RF, acústico e a decisão de fusão com as
+        métricas mais recentes.
         """
-        # Atualizar painel RF
+        # Painel RF
         rf_metrics = self.rf_detector.get_latest_metrics()
         rf_status = rf_metrics["status"]
-        rf_value = rf_metrics["value"]
+        rf_prob = rf_metrics["prob"]
         rf_error = rf_metrics["error"]
 
-        self.rf_value_label.configure(
-            text=f"Métrica RF: {rf_value:.2f}"
+        self.rf_prob_label.configure(
+            text=f"Probabilidade de drone (RF): {rf_prob:.2f}"
         )
 
         if rf_status == "running":
             self.rf_state_label.configure(
-                text="RF em execução (stub)",
+                text="RF em execução",
                 foreground="darkblue",
             )
         elif rf_status == "error":
@@ -290,7 +334,7 @@ class DetectorAppGUI:
                 foreground="gray",
             )
 
-        # Atualizar painel acústico
+        # Painel acústico
         ac_metrics = self.acoustic_detector.get_latest_metrics()
         prob = ac_metrics["prob"]
         avg_prob = ac_metrics["avg_prob"]
@@ -332,11 +376,69 @@ class DetectorAppGUI:
                 foreground="gray",
             )
 
+        # Fusão de sensores
+        self.fusion_engine.update(
+            acoustic_prob=avg_prob if ac_status == "running" else None,
+            rf_prob=rf_prob if rf_status == "running" else None,
+            acoustic_active=self.acoustic_detector.is_running(),
+            rf_active=self.rf_detector.is_running(),
+        )
+        fusion_metrics = self.fusion_engine.get_latest_metrics()
+        fused_prob = fusion_metrics["fused_prob"]
+        fusion_status = fusion_metrics["status"]
+        fusion_source = fusion_metrics["source"]
+        fusion_error = fusion_metrics["error"]
+
+        self.fusion_prob_label.configure(
+            text=f"Probabilidade fundida de drone: {fused_prob:.2f}"
+        )
+
+        if fusion_status == "running":
+            if fused_prob >= self.fusion_engine.fusion_threshold:
+                self.fusion_state_label.configure(
+                    text="Drone detectado (fusão)",
+                    foreground="darkred",
+                )
+            else:
+                self.fusion_state_label.configure(
+                    text="Sem drone detectado (fusão)",
+                    foreground="darkgreen",
+                )
+        elif fusion_status == "error":
+            self.fusion_state_label.configure(
+                text="Erro na fusão de sensores",
+                foreground="darkred",
+            )
+            if fusion_error:
+                self._log(f"Erro na fusão: {fusion_error}")
+        else:
+            self.fusion_state_label.configure(
+                text="Fusão parada",
+                foreground="gray",
+            )
+
+        if fusion_source == "none":
+            self.fusion_source_label.configure(
+                text="Origem atual: nenhum canal ativo."
+            )
+        elif fusion_source == "acoustic":
+            self.fusion_source_label.configure(
+                text="Origem atual: apenas canal acústico."
+            )
+        elif fusion_source == "rf":
+            self.fusion_source_label.configure(
+                text="Origem atual: apenas canal RF."
+            )
+        else:
+            self.fusion_source_label.configure(
+                text="Origem atual: ambos os canais (fusão)."
+            )
+
     def _schedule_update(self) -> None:
         """
         Agendar atualização periódica da interface.
 
-        A cada 200 ms, atualizar os painéis RF e acústico e reagendar a próxima chamada.
+        A cada 200 ms, atualizar os painéis RF, acústico e de fusão.
         """
         self._update_panels()
         self.root.after(200, self._schedule_update)
@@ -356,8 +458,8 @@ def main() -> None:
     """
     Função principal da aplicação gráfica.
 
-    Criar instâncias dos detectores RF (stub) e acústico, configurar a janela
-    Tkinter e iniciar o loop de eventos.
+    Criar instâncias dos detectores RF (stub) e acústico, bem como o motor
+    de fusão, configurar a janela Tkinter e iniciar o loop de eventos.
     """
     model_path = Path("models") / "drone_mfcc_rf.pkl"
 
@@ -374,9 +476,14 @@ def main() -> None:
         return
 
     rf_detector = RFDetectorStub()
+    fusion_engine = SensorFusionEngine(
+        weight_acoustic=0.5,
+        weight_rf=0.5,
+        fusion_threshold=0.5,
+    )
 
     root = tk.Tk()
-    app = DetectorAppGUI(root, acoustic_detector, rf_detector)
+    app = DetectorAppGUI(root, acoustic_detector, rf_detector, fusion_engine)
     root.mainloop()
 
 

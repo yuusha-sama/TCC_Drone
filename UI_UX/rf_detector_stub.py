@@ -26,7 +26,7 @@ class RFDetectorStub:
 
     def __init__(self) -> None:
         self._running: bool = False
-        self._latest_value: float = 0.0  # valor genérico (por exemplo, RSSI médio)
+        self._latest_prob: float = 0.0
         self._latest_status: str = "idle"  # "idle", "running", "error"
         self._last_error_message: str = ""
 
@@ -59,18 +59,16 @@ class RFDetectorStub:
 
     def get_latest_metrics(self) -> Dict[str, float | str]:
         """
-        Retornar métricas genéricas do detector RF.
+        Retornar métricas do detector RF.
 
         Campos retornados:
-            value: valor numérico representando alguma métrica de RF
-                   (ex.: nível de sinal, probabilidade de drone no canal RF)
+            prob: probabilidade estimada de presença de drone no canal RF
+                  (na versão stub, manter valor fixo, como 0.0)
             status: estado atual ("idle", "running", "error")
             error: mensagem de erro mais recente (se houver)
-
-        Nesta versão de stub, o valor é fixo em 0.0 e não há erro.
         """
         return {
-            "value": self._latest_value,
+            "prob": self._latest_prob,
             "status": self._latest_status,
             "error": self._last_error_message,
         }
