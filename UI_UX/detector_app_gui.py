@@ -3,7 +3,7 @@
 # Implementar a interface gráfica principal do sistema de detecção:
 # - painel à esquerda para o canal RF
 # - painel à direita para o canal acústico
-# - painel de fusão de sensores logo abaixo
+# - painel de decisão geral do sistema logo abaixo
 # - três botões de controle:
 #     * iniciar/parar RF
 #     * iniciar/parar acústico
@@ -36,7 +36,7 @@ class DetectorAppGUI:
     - parte superior: dois painéis lado a lado
         * painel esquerdo: RF
         * painel direito: acústico
-    - abaixo: painel de fusão de sensores
+    - abaixo: painel de decisão geral do sistema
     - abaixo: linha de botões (RF, acústico, ambos)
     - parte inferior: log de mensagens
     """
@@ -52,6 +52,11 @@ class DetectorAppGUI:
         self.acoustic_detector = acoustic_detector
         self.rf_detector = rf_detector
         self.fusion_engine = fusion_engine
+
+        # Estados anteriores para gerar mensagens de log apenas em transições
+        self.prev_acoustic_detected: bool = False
+        self.prev_rf_detected: bool = False
+        self.prev_fusion_detected: bool = False
 
         # Configurar janela principal
         self.root.title("Sistema de Detecção de Drones - Interface Gráfica")
@@ -147,15 +152,15 @@ class DetectorAppGUI:
         )
         self.ac_prob_progress.pack(fill="x", pady=(5, 0))
 
-        # Painel de fusão de sensores
+        # Painel de decisão geral (fusão de sensores)
         fusion_frame = ttk.LabelFrame(
-            self.root, text="Fusão de sensores (decisão final)", padding=(10, 5)
+            self.root, text="Decisão geral do sistema", padding=(10, 5)
         )
         fusion_frame.pack(fill="x", padx=10)
 
         self.fusion_state_label = ttk.Label(
             fusion_frame,
-            text="Fusão parada",
+            text="Decisão geral desativada",
             font=("Segoe UI", 12, "bold"),
             foreground="gray",
         )
@@ -163,14 +168,14 @@ class DetectorAppGUI:
 
         self.fusion_prob_label = ttk.Label(
             fusion_frame,
-            text="Probabilidade fundida de drone: 0.00",
+            text="Indicador geral de drone: 0.00",
             font=("Segoe UI", 10),
         )
         self.fusion_prob_label.pack(anchor="w", pady=(2, 0))
 
         self.fusion_source_label = ttk.Label(
             fusion_frame,
-            text="Origem atual: nenhum canal ativo.",
+            text="Canais considerados na decisão: nenhum canal ativo.",
             font=("Segoe UI", 9),
         )
         self.fusion_source_label.pack(anchor="w", pady=(2, 0))
@@ -303,7 +308,7 @@ class DetectorAppGUI:
 
     def _update_panels(self) -> None:
         """
-        Atualizar os painéis RF, acústico e a decisão de fusão com as
+        Atualizar os painéis RF, acústico e a decisão geral com as
         métricas mais recentes.
         """
         # Painel RF
@@ -316,11 +321,15 @@ class DetectorAppGUI:
             text=f"Probabilidade de drone (RF): {rf_prob:.2f}"
         )
 
+        rf_detected = False
         if rf_status == "running":
             self.rf_state_label.configure(
                 text="RF em execução",
                 foreground="darkblue",
             )
+            # Critério simples para detecção RF: probabilidade acima do limiar de fusão
+            if rf_prob >= self.fusion_engine.fusion_threshold:
+                rf_detected = True
         elif rf_status == "error":
             self.rf_state_label.configure(
                 text="Erro no RF",
@@ -333,6 +342,11 @@ class DetectorAppGUI:
                 text="RF parado",
                 foreground="gray",
             )
+
+        # Gerar log apenas quando a detecção RF mudar de não detectado para detectado
+        if rf_detected and not self.prev_rf_detected:
+            self._log("Drone detectado pelo canal RF.")
+        self.prev_rf_detected = rf_detected
 
         # Painel acústico
         ac_metrics = self.acoustic_detector.get_latest_metrics()
@@ -349,11 +363,13 @@ class DetectorAppGUI:
         )
         self.ac_prob_progress["value"] = avg_prob * 100.0
 
+        acoustic_detected = False
         if ac_status == "running":
             if (
                 avg_prob >= self.acoustic_detector.avg_threshold
                 or prob >= self.acoustic_detector.strong_threshold
             ):
+                acoustic_detected = True
                 self.ac_state_label.configure(
                     text="Drone detectado (acústico)",
                     foreground="darkred",
@@ -376,7 +392,12 @@ class DetectorAppGUI:
                 foreground="gray",
             )
 
-        # Fusão de sensores
+        # Gerar log apenas quando a detecção acústica mudar de não detectado para detectado
+        if acoustic_detected and not self.prev_acoustic_detected:
+            self._log("Drone detectado pelo canal acústico.")
+        self.prev_acoustic_detected = acoustic_detected
+
+        # Decisão geral do sistema (fusão)
         self.fusion_engine.update(
             acoustic_prob=avg_prob if ac_status == "running" else None,
             rf_prob=rf_prob if rf_status == "running" else None,
@@ -390,55 +411,62 @@ class DetectorAppGUI:
         fusion_error = fusion_metrics["error"]
 
         self.fusion_prob_label.configure(
-            text=f"Probabilidade fundida de drone: {fused_prob:.2f}"
+            text=f"Indicador geral de drone: {fused_prob:.2f}"
         )
 
+        fusion_detected = False
         if fusion_status == "running":
             if fused_prob >= self.fusion_engine.fusion_threshold:
+                fusion_detected = True
                 self.fusion_state_label.configure(
-                    text="Drone detectado (fusão)",
+                    text="Drone detectado (decisão geral)",
                     foreground="darkred",
                 )
             else:
                 self.fusion_state_label.configure(
-                    text="Sem drone detectado (fusão)",
+                    text="Sem drone detectado (decisão geral)",
                     foreground="darkgreen",
                 )
         elif fusion_status == "error":
             self.fusion_state_label.configure(
-                text="Erro na fusão de sensores",
+                text="Erro na decisão geral",
                 foreground="darkred",
             )
             if fusion_error:
                 self._log(f"Erro na fusão: {fusion_error}")
         else:
             self.fusion_state_label.configure(
-                text="Fusão parada",
+                text="Decisão geral desativada",
                 foreground="gray",
             )
 
+        # Gerar log quando a decisão geral passar para estado de detecção
+        if fusion_detected and not self.prev_fusion_detected:
+            self._log("Decisão geral do sistema: presença de drone confirmada.")
+        self.prev_fusion_detected = fusion_detected
+
         if fusion_source == "none":
             self.fusion_source_label.configure(
-                text="Origem atual: nenhum canal ativo."
+                text="Canais considerados na decisão: nenhum canal ativo."
             )
         elif fusion_source == "acoustic":
             self.fusion_source_label.configure(
-                text="Origem atual: apenas canal acústico."
+                text="Canais considerados na decisão: apenas canal acústico."
             )
         elif fusion_source == "rf":
             self.fusion_source_label.configure(
-                text="Origem atual: apenas canal RF."
+                text="Canais considerados na decisão: apenas canal RF."
             )
         else:
             self.fusion_source_label.configure(
-                text="Origem atual: ambos os canais (fusão)."
+                text="Canais considerados na decisão: canal acústico e RF."
             )
 
     def _schedule_update(self) -> None:
         """
         Agendar atualização periódica da interface.
 
-        A cada 200 ms, atualizar os painéis RF, acústico e de fusão.
+        A cada 200 ms, atualizar os painéis RF, acústico e decisão geral.
         """
         self._update_panels()
         self.root.after(200, self._schedule_update)

@@ -40,8 +40,8 @@ class AcousticDetector:
         sample_rate: int = 16000,
         block_duration: float = 1.0,
         history_size: int = 5,
-        avg_threshold: float = 0.30,
-        strong_threshold: float = 0.60,
+        avg_threshold: float = 0.15,
+        strong_threshold: float = 0.50,
         drone_label: str = "Drone",
     ) -> None:
         # Parâmetros de modelo

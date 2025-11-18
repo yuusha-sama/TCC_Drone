@@ -18,8 +18,8 @@ DRONE_LABEL = "Drone"
 
 # ===== AJUSTES DE DECISÃO =====
 # agora limite de ~30% pra detectar
-DRONE_AVG_THRESHOLD = 0.30     # média das últimas probabilidades
-DRONE_STRONG_THRESHOLD = 0.60  # prob atual bem alta já força detecção
+DRONE_AVG_THRESHOLD = 0.20     # média das últimas probabilidades
+DRONE_STRONG_THRESHOLD = 0.50  # prob atual bem alta já força detecção
 PROB_HISTORY_SIZE = 5          # quantos blocos entram na média
 
 prob_history = deque(maxlen=PROB_HISTORY_SIZE)
@@ -60,7 +60,7 @@ def callback(indata, frames, time, status):
     prob_history.append(drone_prob)
     avg_prob = sum(prob_history) / len(prob_history)
 
-    # Decisão: média >= 0.30 OU prob atual >= 0.60
+    # Decisão: média >= 0.20 OU prob atual >= 0.50
     if avg_prob >= DRONE_AVG_THRESHOLD or drone_prob >= DRONE_STRONG_THRESHOLD:
         print(
             f"Drone detectado! "
