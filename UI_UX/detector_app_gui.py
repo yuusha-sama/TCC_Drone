@@ -1,519 +1,234 @@
 # UI_UX/detector_app_gui.py
-#
-# Implementar a interface gráfica principal do sistema de detecção:
-# - painel à esquerda para o canal RF
-# - painel à direita para o canal acústico
-# - painel de decisão geral do sistema logo abaixo
-# - três botões de controle:
-#     * iniciar/parar RF
-#     * iniciar/parar acústico
-#     * iniciar/parar ambos
-# - log de mensagens na parte inferior
-
 from pathlib import Path
-import threading
 import sys
-
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from acoustic_detector_core import AcousticDetector
-from rf_detector_stub import RFDetectorStub
-
-# Ajustar sys.path para importar sensor_fusion_core na raiz do projeto
+# --- AJUSTE DE PATH ---
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from sensor_fusion_core import SensorFusionEngine  # noqa: E402
+# Imports do Projeto
+from acoustic_detector_core import AcousticDetector
+from sensor_fusion_core import SensorFusionEngine
+
+# Importa o Simulador da pasta RF
+try:
+    from RF.rf_detector_sim import RFDetectorSim
+except ImportError as e:
+    print(f"ERRO CRÍTICO: Não achei RF/rf_detector_sim.py. {e}")
+    sys.exit(1)
 
 
 class DetectorAppGUI:
     """
-    Implementar a janela principal do sistema de detecção.
-
-    Layout geral:
-    - parte superior: dois painéis lado a lado
-        * painel esquerdo: RF
-        * painel direito: acústico
-    - abaixo: painel de decisão geral do sistema
-    - abaixo: linha de botões (RF, acústico, ambos)
-    - parte inferior: log de mensagens
+    Interface Gráfica Principal - TCC Drone Detection
+    Exibe: Dados RF (Real vs Predito), Acústico e Fusão.
     """
-
-    def __init__(
-        self,
-        root: tk.Tk,
-        acoustic_detector: AcousticDetector,
-        rf_detector: RFDetectorStub,
-        fusion_engine: SensorFusionEngine,
-    ) -> None:
+    def __init__(self, root, rf_detector, acoustic_detector, fusion_engine):
         self.root = root
-        self.acoustic_detector = acoustic_detector
+        self.root.title("Sistema de Detecção e Validação (TCC)")
+        self.root.geometry("950x700")
+
         self.rf_detector = rf_detector
+        self.acoustic_detector = acoustic_detector
         self.fusion_engine = fusion_engine
 
-        # Estados anteriores para gerar mensagens de log apenas em transições
-        self.prev_acoustic_detected: bool = False
-        self.prev_rf_detected: bool = False
-        self.prev_fusion_detected: bool = False
+        # --- ESTILOS VISUAIS ---
+        self.style = ttk.Style()
+        self.style.theme_use("clam")
+        
+        # Fontes e Cores
+        self.style.configure("TLabel", font=("Arial", 10))
+        self.style.configure("Header.TLabel", font=("Arial", 14, "bold"))
+        
+        # Estilos dinâmicos para o erro
+        self.style.configure("Good.TLabel", foreground="green", font=("Arial", 10, "bold"))
+        self.style.configure("Bad.TLabel", foreground="red", font=("Arial", 10, "bold"))
+        
+        # Estilos para Alertas
+        self.style.configure("Safe.TLabel", foreground="green", font=("Arial", 16, "bold"))
+        self.style.configure("Danger.TLabel", foreground="red", font=("Arial", 16, "bold"))
 
-        # Configurar janela principal
-        self.root.title("Sistema de Detecção de Drones - Interface Gráfica")
-        self.root.geometry("900x550")
-        self.root.resizable(False, False)
-
-        # Criar elementos da interface
-        self._create_widgets()
-
-        # Iniciar ciclo de atualização periódica
+        self._create_layout()
         self._schedule_update()
-
-        # Registrar callback de fechamento da janela
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def _create_widgets(self) -> None:
-        """
-        Criar e organizar todos os elementos visuais da interface.
-        """
-        # Parte superior: RF (esquerda) e acústico (direita)
-        top_frame = ttk.Frame(self.root, padding=(10, 10))
-        top_frame.pack(fill="both", expand=True)
+    def _create_layout(self):
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Painel RF
-        rf_frame = ttk.LabelFrame(top_frame, text="Canal RF", padding=(10, 10))
-        rf_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
+        # Título
+        ttk.Label(main_frame, text="Monitoramento de Sensores & Validação IA", style="Header.TLabel").pack(pady=10)
 
-        self.rf_state_label = ttk.Label(
-            rf_frame,
-            text="RF parado",
-            font=("Segoe UI", 12, "bold"),
-            foreground="gray",
-        )
-        self.rf_state_label.pack(anchor="w", pady=(0, 10))
+        # --- ÁREA DOS SENSORES ---
+        sensors_frame = ttk.Frame(main_frame)
+        sensors_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        self.rf_prob_label = ttk.Label(
-            rf_frame,
-            text="Probabilidade de drone (RF): 0.00",
-            font=("Segoe UI", 10),
-        )
-        self.rf_prob_label.pack(anchor="w")
+        # === PAINEL ESQUERDO: RF (LRS) ===
+        self.rf_frame = ttk.LabelFrame(sensors_frame, text="📡 Sensor RF (Simulação Física)", padding="10")
+        self.rf_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+        
+        # Dados Brutos
+        self.lbl_rf_rssi = ttk.Label(self.rf_frame, text="RSSI: -- dBm")
+        self.lbl_rf_rssi.pack(anchor="w")
+        self.lbl_rf_snr = ttk.Label(self.rf_frame, text="SNR: -- dB")
+        self.lbl_rf_snr.pack(anchor="w")
+        
+        ttk.Separator(self.rf_frame, orient='horizontal').pack(fill='x', pady=8)
+        
+        # --- ÁREA DE VALIDAÇÃO (Onde você ganha nota no TCC) ---
+        ttk.Label(self.rf_frame, text="[VALIDAÇÃO EM TEMPO REAL]", font=("Arial", 8, "bold"), foreground="gray").pack(anchor="w")
+        
+        self.lbl_rf_real = ttk.Label(self.rf_frame, text="Distância REAL: -- m")
+        self.lbl_rf_real.pack(anchor="w")
+        
+        self.lbl_rf_pred = ttk.Label(self.rf_frame, text="Distância IA: -- m", font=("Arial", 11, "bold"))
+        self.lbl_rf_pred.pack(anchor="w")
+        
+        self.lbl_rf_error = ttk.Label(self.rf_frame, text="Erro Absoluto: -- m", style="Good.TLabel")
+        self.lbl_rf_error.pack(anchor="w", pady=2)
+        # -------------------------------------------------------
 
-        self.rf_status_detail_label = ttk.Label(
-            rf_frame,
-            text="RF aguardando integração com hardware e pipeline RF.",
-            font=("Segoe UI", 9),
-            wraplength=400,
-        )
-        self.rf_status_detail_label.pack(anchor="w", pady=(5, 0))
+        ttk.Separator(self.rf_frame, orient='horizontal').pack(fill='x', pady=8)
 
-        # Painel acústico
-        ac_frame = ttk.LabelFrame(
-            top_frame, text="Canal acústico", padding=(10, 10)
-        )
-        ac_frame.pack(side="left", fill="both", expand=True, padx=(5, 0))
+        self.lbl_rf_prob = ttk.Label(self.rf_frame, text="Nível de Ameaça: 0.0%")
+        self.lbl_rf_prob.pack(anchor="w")
+        self.progress_rf = ttk.Progressbar(self.rf_frame, length=100, mode="determinate")
+        self.progress_rf.pack(fill=tk.X, pady=5)
 
-        self.ac_state_label = ttk.Label(
-            ac_frame,
-            text="Acústico parado",
-            font=("Segoe UI", 12, "bold"),
-            foreground="gray",
-        )
-        self.ac_state_label.pack(anchor="w", pady=(0, 10))
+        # === PAINEL DIREITO: ACÚSTICO ===
+        self.ac_frame = ttk.LabelFrame(sensors_frame, text="🎤 Sensor Acústico (MFCC)", padding="10")
+        self.ac_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5)
+        
+        self.lbl_ac_prob = ttk.Label(self.ac_frame, text="Prob Instantânea: 0.0%")
+        self.lbl_ac_prob.pack(anchor="w")
+        
+        self.lbl_ac_avg = ttk.Label(self.ac_frame, text="Média Móvel (5s): 0.0%")
+        self.lbl_ac_avg.pack(anchor="w")
+        
+        self.progress_ac = ttk.Progressbar(self.ac_frame, length=100, mode="determinate")
+        self.progress_ac.pack(fill=tk.X, pady=5)
 
-        self.ac_current_prob_label = ttk.Label(
-            ac_frame,
-            text="Probabilidade atual de drone (acústico): 0.00",
-            font=("Segoe UI", 10),
-        )
-        self.ac_current_prob_label.pack(anchor="w")
+        # === PAINEL INFERIOR: FUSÃO ===
+        fusion_frame = ttk.LabelFrame(main_frame, text="🧠 Fusão de Sensores (Decisão Final)", padding="10")
+        fusion_frame.pack(fill=tk.X, pady=10)
+        
+        self.lbl_fusion_status = ttk.Label(fusion_frame, text="SISTEMA AGUARDANDO", style="Header.TLabel")
+        self.lbl_fusion_status.pack()
+        
+        self.lbl_fusion_prob = ttk.Label(fusion_frame, text="Probabilidade Combinada: 0.00%")
+        self.lbl_fusion_prob.pack()
+        
+        self.progress_fusion = ttk.Progressbar(fusion_frame, length=100, mode="determinate")
+        self.progress_fusion.pack(fill=tk.X, pady=5)
 
-        self.ac_avg_prob_label = ttk.Label(
-            ac_frame,
-            text="Probabilidade média (últimos blocos): 0.00",
-            font=("Segoe UI", 10),
-        )
-        self.ac_avg_prob_label.pack(anchor="w", pady=(2, 0))
+        # Botão de Início
+        ttk.Button(main_frame, text="▶ INICIAR SISTEMA COMPLETO", command=self._start_all).pack(fill=tk.X, pady=5, padx=50)
 
-        ac_progress_frame = ttk.Frame(ac_frame)
-        ac_progress_frame.pack(fill="x", pady=(10, 0))
-
-        ttk.Label(
-            ac_progress_frame,
-            text="Indicador de probabilidade de drone (acústico):",
-            font=("Segoe UI", 9),
-        ).pack(anchor="w")
-
-        self.ac_prob_progress = ttk.Progressbar(
-            ac_progress_frame,
-            orient="horizontal",
-            mode="determinate",
-            maximum=100,
-        )
-        self.ac_prob_progress.pack(fill="x", pady=(5, 0))
-
-        # Painel de decisão geral (fusão de sensores)
-        fusion_frame = ttk.LabelFrame(
-            self.root, text="Decisão geral do sistema", padding=(10, 5)
-        )
-        fusion_frame.pack(fill="x", padx=10)
-
-        self.fusion_state_label = ttk.Label(
-            fusion_frame,
-            text="Decisão geral desativada",
-            font=("Segoe UI", 12, "bold"),
-            foreground="gray",
-        )
-        self.fusion_state_label.pack(anchor="w")
-
-        self.fusion_prob_label = ttk.Label(
-            fusion_frame,
-            text="Indicador geral de drone: 0.00",
-            font=("Segoe UI", 10),
-        )
-        self.fusion_prob_label.pack(anchor="w", pady=(2, 0))
-
-        self.fusion_source_label = ttk.Label(
-            fusion_frame,
-            text="Canais considerados na decisão: nenhum canal ativo.",
-            font=("Segoe UI", 9),
-        )
-        self.fusion_source_label.pack(anchor="w", pady=(2, 0))
-
-        # Linha de botões
-        controls_frame = ttk.Frame(self.root, padding=(10, 5))
-        controls_frame.pack(fill="x")
-
-        self.btn_rf = ttk.Button(
-            controls_frame,
-            text="Iniciar RF",
-            width=15,
-            command=self._toggle_rf,
-        )
-        self.btn_rf.pack(side="left", padx=(0, 5))
-
-        self.btn_acoustic = ttk.Button(
-            controls_frame,
-            text="Iniciar acústico",
-            width=15,
-            command=self._toggle_acoustic,
-        )
-        self.btn_acoustic.pack(side="left", padx=(5, 5))
-
-        self.btn_both = ttk.Button(
-            controls_frame,
-            text="Iniciar ambos",
-            width=15,
-            command=self._toggle_both,
-        )
-        self.btn_both.pack(side="left", padx=(5, 0))
-
-        # Log de mensagens
-        log_frame = ttk.Frame(self.root, padding=(10, 5))
-        log_frame.pack(fill="both", expand=True)
-
-        ttk.Label(
-            log_frame,
-            text="Log de mensagens:",
-            font=("Segoe UI", 10),
-        ).pack(anchor="w")
-
-        self.log_text = tk.Text(
-            log_frame,
-            height=8,
-            wrap="word",
-            state="disabled",
-            font=("Consolas", 9),
-        )
-        self.log_text.pack(fill="both", expand=True, pady=(5, 0))
-
-    def _log(self, message: str) -> None:
-        """
-        Adicionar uma linha ao log de mensagens.
-        """
-        self.log_text.configure(state="normal")
-        self.log_text.insert("end", message + "\n")
-        self.log_text.see("end")
-        self.log_text.configure(state="disabled")
-
-    def _toggle_rf(self) -> None:
-        """
-        Ligar ou desligar o canal RF, conforme o estado atual.
-        """
-        if self.rf_detector.is_running():
-            self.rf_detector.stop()
-            self._log("Canal RF parado.")
-            self.btn_rf.configure(text="Iniciar RF")
-        else:
+    def _start_all(self):
+        """Inicia as threads dos sensores"""
+        print("GUI: Iniciando sensores...")
+        self.rf_detector.start()
+        if self.acoustic_detector:
             try:
-                self.rf_detector.start()
-                self._log("Canal RF iniciado (stub, aguardando integração real).")
-                self.btn_rf.configure(text="Parar RF")
-            except Exception as exc:
-                self._log(f"Erro ao iniciar RF: {exc}")
-                messagebox.showerror(
-                    "Erro ao iniciar RF",
-                    f"Não foi possível iniciar o detector RF.\n\n{exc}",
-                )
+                self.acoustic_detector.start()
+            except Exception as e:
+                print(f"GUI: Erro ao iniciar mic: {e}")
 
-    def _toggle_acoustic(self) -> None:
-        """
-        Ligar ou desligar o canal acústico, conforme o estado atual.
-        """
-        if self.acoustic_detector.is_running():
-            self.acoustic_detector.stop()
-            self._log("Canal acústico parado.")
-            self.btn_acoustic.configure(text="Iniciar acústico")
+    def _schedule_update(self):
+        """Loop principal da GUI (Atualiza a cada 100ms)"""
+        
+        # 1. Atualiza RF
+        rf = self.rf_detector.get_latest_metrics()
+        
+        # Atualiza textos
+        self.lbl_rf_rssi.config(text=f"RSSI: {rf.get('rssi',0):.1f} dBm")
+        self.lbl_rf_snr.config(text=f"SNR: {rf.get('snr',0):.1f} dB")
+        
+        # Lógica de Validação (Real vs IA)
+        real = rf.get('real_dist', 0)
+        pred = rf.get('dist_m', 0)
+        erro = rf.get('error', 0)
+        
+        self.lbl_rf_real.config(text=f"Distância REAL: {real:.1f} m")
+        self.lbl_rf_pred.config(text=f"Distância IA: {pred:.1f} m")
+        
+        # Se o erro for grande (>50m), fica vermelho. Se pequeno, verde.
+        style_err = "Bad.TLabel" if erro > 50 else "Good.TLabel"
+        self.lbl_rf_error.config(text=f"Erro (Acurácia): {erro:.1f} m", style=style_err)
+        
+        # Probabilidade RF
+        p_rf = rf.get('prob', 0)
+        self.lbl_rf_prob.config(text=f"Nível de Ameaça: {p_rf*100:.1f}%")
+        self.progress_rf["value"] = p_rf * 100
+
+        # 2. Atualiza Acústico
+        p_ac_avg = 0.0
+        if self.acoustic_detector:
+            ac = self.acoustic_detector.get_latest_metrics()
+            p_ac_inst = ac.get('prob', 0)
+            p_ac_avg = ac.get('avg_prob', 0)
+            
+            self.lbl_ac_prob.config(text=f"Prob Inst: {p_ac_inst*100:.0f}%")
+            self.lbl_ac_avg.config(text=f"Média Móvel: {p_ac_avg*100:.1f}%")
+            self.progress_ac["value"] = p_ac_avg * 100
+
+        # 3. Executa Fusão
+        self.fusion_engine.update(acoustic_prob=p_ac_avg, rf_prob=p_rf)
+        fus = self.fusion_engine.get_latest_metrics()
+        p_final = fus.get('fused_prob', 0)
+        
+        self.lbl_fusion_prob.config(text=f"Probabilidade Combinada: {p_final*100:.1f}%")
+        self.progress_fusion["value"] = p_final * 100
+        
+        # Atualiza Status Visual
+        if p_final >= 0.6:
+            self.lbl_fusion_status.config(text="⚠️ ALERTA: DRONE DETECTADO ⚠️", style="Danger.TLabel")
+        elif p_final > 0.3:
+             self.lbl_fusion_status.config(text="👁️ ATENÇÃO: POSSÍVEL ATIVIDADE", style="Header.TLabel")
         else:
-            def start_acoustic():
-                try:
-                    self.acoustic_detector.start()
-                    self._log("Canal acústico iniciado.")
-                except Exception as exc:
-                    self._log(f"Erro ao iniciar acústico: {exc}")
-                    messagebox.showerror(
-                        "Erro ao iniciar acústico",
-                        f"Não foi possível iniciar o detector acústico.\n\n{exc}",
-                    )
+            self.lbl_fusion_status.config(text="✅ ÁREA SEGURA", style="Safe.TLabel")
 
-            thread = threading.Thread(target=start_acoustic, daemon=True)
-            thread.start()
-            self.btn_acoustic.configure(text="Parar acústico")
+        # Re-agenda para daqui 100ms
+        self.root.after(100, self._schedule_update)
 
-    def _toggle_both(self) -> None:
-        """
-        Ligar ou desligar ambos os canais (RF e acústico).
-
-        Regra:
-        - se qualquer um dos dois estiver ligado, a ação é desligar os dois
-        - se ambos estiverem desligados, a ação é ligar os dois
-        """
-        running_any = (
-            self.rf_detector.is_running() or self.acoustic_detector.is_running()
-        )
-
-        if running_any:
-            if self.rf_detector.is_running():
-                self.rf_detector.stop()
-            if self.acoustic_detector.is_running():
-                self.acoustic_detector.stop()
-            self._log("Ambos os canais foram parados.")
-            self.btn_rf.configure(text="Iniciar RF")
-            self.btn_acoustic.configure(text="Iniciar acústico")
-            self.btn_both.configure(text="Iniciar ambos")
-        else:
-            self._toggle_rf()
-            self._toggle_acoustic()
-            self.btn_both.configure(text="Parar ambos")
-
-    def _update_panels(self) -> None:
-        """
-        Atualizar os painéis RF, acústico e a decisão geral com as
-        métricas mais recentes.
-        """
-        # Painel RF
-        rf_metrics = self.rf_detector.get_latest_metrics()
-        rf_status = rf_metrics["status"]
-        rf_prob = rf_metrics["prob"]
-        rf_error = rf_metrics["error"]
-
-        self.rf_prob_label.configure(
-            text=f"Probabilidade de drone (RF): {rf_prob:.2f}"
-        )
-
-        rf_detected = False
-        if rf_status == "running":
-            self.rf_state_label.configure(
-                text="RF em execução",
-                foreground="darkblue",
-            )
-            # Critério simples para detecção RF: probabilidade acima do limiar de fusão
-            if rf_prob >= self.fusion_engine.fusion_threshold:
-                rf_detected = True
-        elif rf_status == "error":
-            self.rf_state_label.configure(
-                text="Erro no RF",
-                foreground="darkred",
-            )
-            if rf_error:
-                self._log(f"Erro no RF: {rf_error}")
-        else:
-            self.rf_state_label.configure(
-                text="RF parado",
-                foreground="gray",
-            )
-
-        # Gerar log apenas quando a detecção RF mudar de não detectado para detectado
-        if rf_detected and not self.prev_rf_detected:
-            self._log("Drone detectado pelo canal RF.")
-        self.prev_rf_detected = rf_detected
-
-        # Painel acústico
-        ac_metrics = self.acoustic_detector.get_latest_metrics()
-        prob = ac_metrics["prob"]
-        avg_prob = ac_metrics["avg_prob"]
-        ac_status = ac_metrics["status"]
-        ac_error = ac_metrics["error"]
-
-        self.ac_current_prob_label.configure(
-            text=f"Probabilidade atual de drone (acústico): {prob:.2f}"
-        )
-        self.ac_avg_prob_label.configure(
-            text=f"Probabilidade média (últimos blocos): {avg_prob:.2f}"
-        )
-        self.ac_prob_progress["value"] = avg_prob * 100.0
-
-        acoustic_detected = False
-        if ac_status == "running":
-            if (
-                avg_prob >= self.acoustic_detector.avg_threshold
-                or prob >= self.acoustic_detector.strong_threshold
-            ):
-                acoustic_detected = True
-                self.ac_state_label.configure(
-                    text="Drone detectado (acústico)",
-                    foreground="darkred",
-                )
-            else:
-                self.ac_state_label.configure(
-                    text="Sem drone detectado (acústico)",
-                    foreground="darkgreen",
-                )
-        elif ac_status == "error":
-            self.ac_state_label.configure(
-                text="Erro no canal acústico",
-                foreground="darkred",
-            )
-            if ac_error:
-                self._log(f"Erro no acústico: {ac_error}")
-        else:
-            self.ac_state_label.configure(
-                text="Acústico parado",
-                foreground="gray",
-            )
-
-        # Gerar log apenas quando a detecção acústica mudar de não detectado para detectado
-        if acoustic_detected and not self.prev_acoustic_detected:
-            self._log("Drone detectado pelo canal acústico.")
-        self.prev_acoustic_detected = acoustic_detected
-
-        # Decisão geral do sistema (fusão)
-        self.fusion_engine.update(
-            acoustic_prob=avg_prob if ac_status == "running" else None,
-            rf_prob=rf_prob if rf_status == "running" else None,
-            acoustic_active=self.acoustic_detector.is_running(),
-            rf_active=self.rf_detector.is_running(),
-        )
-        fusion_metrics = self.fusion_engine.get_latest_metrics()
-        fused_prob = fusion_metrics["fused_prob"]
-        fusion_status = fusion_metrics["status"]
-        fusion_source = fusion_metrics["source"]
-        fusion_error = fusion_metrics["error"]
-
-        self.fusion_prob_label.configure(
-            text=f"Indicador geral de drone: {fused_prob:.2f}"
-        )
-
-        fusion_detected = False
-        if fusion_status == "running":
-            if fused_prob >= self.fusion_engine.fusion_threshold:
-                fusion_detected = True
-                self.fusion_state_label.configure(
-                    text="Drone detectado (decisão geral)",
-                    foreground="darkred",
-                )
-            else:
-                self.fusion_state_label.configure(
-                    text="Sem drone detectado (decisão geral)",
-                    foreground="darkgreen",
-                )
-        elif fusion_status == "error":
-            self.fusion_state_label.configure(
-                text="Erro na decisão geral",
-                foreground="darkred",
-            )
-            if fusion_error:
-                self._log(f"Erro na fusão: {fusion_error}")
-        else:
-            self.fusion_state_label.configure(
-                text="Decisão geral desativada",
-                foreground="gray",
-            )
-
-        # Gerar log quando a decisão geral passar para estado de detecção
-        if fusion_detected and not self.prev_fusion_detected:
-            self._log("Decisão geral do sistema: presença de drone confirmada.")
-        self.prev_fusion_detected = fusion_detected
-
-        if fusion_source == "none":
-            self.fusion_source_label.configure(
-                text="Canais considerados na decisão: nenhum canal ativo."
-            )
-        elif fusion_source == "acoustic":
-            self.fusion_source_label.configure(
-                text="Canais considerados na decisão: apenas canal acústico."
-            )
-        elif fusion_source == "rf":
-            self.fusion_source_label.configure(
-                text="Canais considerados na decisão: apenas canal RF."
-            )
-        else:
-            self.fusion_source_label.configure(
-                text="Canais considerados na decisão: canal acústico e RF."
-            )
-
-    def _schedule_update(self) -> None:
-        """
-        Agendar atualização periódica da interface.
-
-        A cada 200 ms, atualizar os painéis RF, acústico e decisão geral.
-        """
-        self._update_panels()
-        self.root.after(200, self._schedule_update)
-
-    def _on_close(self) -> None:
-        """
-        Garantir parada de ambos os detectores ao fechar a janela.
-        """
-        if self.rf_detector.is_running():
-            self.rf_detector.stop()
-        if self.acoustic_detector.is_running():
+    def _on_close(self):
+        self.rf_detector.stop()
+        if self.acoustic_detector:
             self.acoustic_detector.stop()
         self.root.destroy()
 
 
-def main() -> None:
-    """
-    Função principal da aplicação gráfica.
+def main():
+    # 1. Caminho dos Modelos
+    rf_model_path = Path("models") / "drone_rf_regressor.pkl"
+    ac_model_path = Path("models") / "drone_mfcc_rf.pkl"
 
-    Criar instâncias dos detectores RF (stub) e acústico, bem como o motor
-    de fusão, configurar a janela Tkinter e iniciar o loop de eventos.
-    """
-    model_path = Path("models") / "drone_mfcc_rf.pkl"
-
-    try:
-        acoustic_detector = AcousticDetector(model_path=model_path)
-    except Exception as exc:
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror(
-            "Erro ao carregar modelo acústico",
-            f"Não foi possível carregar o modelo de detecção acústica.\n\n{exc}",
-        )
-        root.destroy()
+    # 2. Inicia o Simulador RF
+    if not rf_model_path.exists():
+        messagebox.showerror("Erro", "Modelo RF não encontrado! Rode o treino primeiro.")
         return
+        
+    print(f"Iniciando Simulador RF com modelo: {rf_model_path}")
+    rf_detector = RFDetectorSim(model_path=rf_model_path)
 
-    rf_detector = RFDetectorStub()
-    fusion_engine = SensorFusionEngine(
-        weight_acoustic=0.5,
-        weight_rf=0.5,
-        fusion_threshold=0.5,
-    )
+    # 3. Inicia o Detector Acústico
+    try:
+        acoustic_detector = AcousticDetector(model_path=ac_model_path)
+        print("Detector Acústico carregado.")
+    except Exception as e:
+        print(f"AVISO: Detector Acústico falhou ({e}). O app rodará sem mic.")
+        acoustic_detector = None
 
+    # 4. Motor de Fusão
+    fusion_engine = SensorFusionEngine(weight_acoustic=0.5, weight_rf=0.5)
+
+    # 5. Inicia App
     root = tk.Tk()
-    app = DetectorAppGUI(root, acoustic_detector, rf_detector, fusion_engine)
+    app = DetectorAppGUI(root, rf_detector, acoustic_detector, fusion_engine)
     root.mainloop()
-
 
 if __name__ == "__main__":
     main()
