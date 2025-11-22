@@ -118,9 +118,7 @@ class DetectorAppGUI:
         sensors_frame = ttk.Frame(main_frame)
         sensors_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        # ---------------------------------------------------------
         # PAINEL RF (ESQUERDA)
-        # ---------------------------------------------------------
         self.rf_frame = ttk.LabelFrame(sensors_frame, text="Sensor RF (LRS)", padding="10")
         self.rf_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
         
@@ -161,9 +159,7 @@ class DetectorAppGUI:
         self.btn_rf_stop = ttk.Button(self.rf_frame, text="PARAR RF", command=self._stop_rf)
         self.btn_rf_stop.pack(fill=tk.X)
 
-        # ---------------------------------------------------------
         # PAINEL ACÚSTICO (DIREITA)
-        # ---------------------------------------------------------
         self.ac_frame = ttk.LabelFrame(sensors_frame, text="Sensor Acústico", padding="10")
         self.ac_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5)
         
@@ -197,9 +193,7 @@ class DetectorAppGUI:
         self.btn_ac_stop = ttk.Button(self.ac_frame, text="PARAR ÁUDIO", command=self._stop_ac)
         self.btn_ac_stop.pack(fill=tk.X)
 
-        # ---------------------------------------------------------
         # FUSÃO (CENTRO)
-        # ---------------------------------------------------------
         fusion_frame = ttk.LabelFrame(main_frame, text="Decisão de Fusão", padding="10")
         fusion_frame.pack(fill=tk.X, pady=5)
         
@@ -210,9 +204,7 @@ class DetectorAppGUI:
         self.lbl_fusion_status = ttk.Label(fusion_frame, text="SISTEMA AGUARDANDO", style="Header.TLabel", foreground="gray")
         self.lbl_fusion_status.pack()
 
-        # ---------------------------------------------------------
-        # LOG (EMBAIXO)
-        # ---------------------------------------------------------
+        # LOG 
         log_frame = ttk.LabelFrame(main_frame, text="Log do Sistema", padding="5")
         log_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         
@@ -351,11 +343,11 @@ class DetectorAppGUI:
         if not rf_active and not ac_active:
             self.lbl_fusion_status.config(text="AGUARDANDO SENSORES", style="Header.TLabel", foreground="gray")
         elif p_final >= 0.6:
-            self.lbl_fusion_status.config(text="⚠️ DRONE DETECTADO", style="Danger.TLabel")
+            self.lbl_fusion_status.config(text=" DRONE DETECTADO", style="Danger.TLabel")
         elif p_final > 0.2:
-            self.lbl_fusion_status.config(text="⚠️ POSSÍVEL AMEAÇA", style="Header.TLabel", foreground="orange")
+            self.lbl_fusion_status.config(text=" POSSÍVEL AMEAÇA", style="Header.TLabel", foreground="orange")
         else:
-            self.lbl_fusion_status.config(text="✅ ÁREA SEGURA", style="Safe.TLabel")
+            self.lbl_fusion_status.config(text=" ÁREA SEGURA", style="Safe.TLabel")
 
         # Log de Alerta (evita spam)
         if p_final >= 0.6:

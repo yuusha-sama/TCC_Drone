@@ -5,7 +5,7 @@ import joblib
 import pandas as pd
 from pathlib import Path
 from typing import Dict
-import serial # Requer: pip install pyserial
+import serial 
 
 class RFDetectorReal:
     """

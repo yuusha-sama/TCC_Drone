@@ -8,15 +8,6 @@ from typing import Dict, Optional
 
 
 class SensorFusionEngine:
-    """
-    Encapsular a lógica de fusão de sensores (acústico + RF).
-
-    Responsabilidades:
-    - receber as probabilidades de cada canal (quando disponíveis)
-    - calcular uma probabilidade fundida de presença de drone
-    - indicar o estado atual da fusão (idle, running, error)
-    """
-
     def __init__(
         self,
         weight_acoustic: float = 0.5,
@@ -43,22 +34,7 @@ class SensorFusionEngine:
         acoustic_active: bool,
         rf_active: bool,
     ) -> None:
-        """
-        Atualizar o estado de fusão com base nas entradas dos dois canais.
-
-        Parâmetros:
-            acoustic_prob: probabilidade de drone vinda do canal acústico
-                           (None quando o canal estiver inativo)
-            rf_prob: probabilidade de drone vinda do canal RF
-                     (None quando o canal estiver inativo)
-            acoustic_active: indica se o canal acústico está ativo
-            rf_active: indica se o canal RF está ativo
-
-        Regras de fusão:
-            - se apenas um canal estiver ativo, usar diretamente a probabilidade dele
-            - se ambos estiverem ativos, calcular média ponderada pelos pesos
-            - se nenhum estiver ativo, probabilidade fundida volta a zero (idle)
-        """
+        
         try:
             if not acoustic_active and not rf_active:
                 self.latest_fused_prob = 0.0
@@ -105,19 +81,6 @@ class SensorFusionEngine:
             self.latest_status = "error"
 
     def get_latest_metrics(self) -> Dict[str, float | str]:
-        """
-        Retornar dicionário com as métricas mais recentes da fusão.
-
-        Campos retornados:
-            fused_prob: probabilidade fundida de presença de drone
-            status: estado atual da fusão ("idle", "running", "error")
-            source: origem lógica:
-                    - "none"     -> nenhum canal ativo
-                    - "acoustic" -> apenas canal acústico utilizado
-                    - "rf"       -> apenas canal RF utilizado
-                    - "fusion"   -> ambos os canais considerados
-            error: mensagem de erro mais recente (se houver)
-        """
         return {
             "fused_prob": self.latest_fused_prob,
             "status": self.latest_status,

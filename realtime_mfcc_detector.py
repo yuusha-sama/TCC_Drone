@@ -17,7 +17,7 @@ clf = joblib.load(MODEL_PATH)
 DRONE_LABEL = "Drone"
 
 # ===== AJUSTES DE DECISÃO =====
-# agora limite de ~30% pra detectar
+# agora limite de ~20% pra detectar
 DRONE_AVG_THRESHOLD = 0.20     # média das últimas probabilidades
 DRONE_STRONG_THRESHOLD = 0.50  # prob atual bem alta já força detecção
 PROB_HISTORY_SIZE = 5          # quantos blocos entram na média
