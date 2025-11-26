@@ -1,87 +1,123 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-import joblib
-import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from pathlib import Path
-import sys
+import joblib
 
-# --- CONFIGURACAO DE CAMINHOS ---
-CURRENT_DIR = Path(__file__).resolve().parent
-ROOT_DIR = CURRENT_DIR.parent
-MODELS_DIR = ROOT_DIR / "models"
-MODELS_DIR.mkdir(exist_ok=True)
 
-def gerar_dados_treino_tcc(n_samples=5000):
+# Pastas de apoio
+THIS_DIR = Path(__file__).resolve().parent
+ROOT_DIR = THIS_DIR.parents[1]
+
+CSV_PATH = THIS_DIR / "dataset_rf_simulado.csv"
+MODEL_PATH = ROOT_DIR / "drone_rf_regressor.pkl"
+
+
+def gerar_dataset_rf(
+    n_amostras: int = 5000,
+    distancia_max: float = 300.0,
+    seed: int = 42,
+) -> pd.DataFrame:
     """
-    Gera dataset sintetico simulando CAMPO ABERTO (Line-of-Sight).
-    Ruido reduzido para garantir alta precisao na apresentacao.
+    Gera um dataset sintético de RF.
+    A distância cresce de 0 até distancia_max.
+    O sinal cai logaritmicamente com ruído gaussiano.
+    Isso aqui é só para simulação, não é medida real.
     """
-    print("Gerando 5.000 pontos de dados (Cenario: Visada Direta)...")
-    distancias = np.random.uniform(5, 2000, n_samples)
-    
-    # FORMULA FISICA (Log-Distance Path Loss)
-    # Ruido (scale) reduzido de 6 para 2 (Campo Aberto)
-    rssi = -20 - (28 * np.log10(distancias + 1)) + np.random.normal(0, 2, n_samples)
-    
-    # SNR
-    snr = (rssi + 105) / 3
-    snr = np.clip(snr, -20, 10) + np.random.normal(0, 1, n_samples)
-    
-    df = pd.DataFrame({'rssi': rssi, 'snr': snr, 'distancia': distancias})
+    rng = np.random.default_rng(seed)
+
+    # Distância "real" que queremos recuperar no modelo
+    distance_real = rng.uniform(0.0, distancia_max, size=n_amostras)
+
+    # RSSI bruto em dB: curva bem simples de perda em espaço livre + ruído
+    # -20 é só um nível de referência arbitrário
+    # 28 é o coeficiente da queda em função do log10 da distância
+    rssi_raw = -20.0 - 28.0 * np.log10(distance_real + 1.0) + rng.normal(0.0, 2.0, size=n_amostras)
+
+    # SNR derivado do RSSI, só para ter uma feature com escala mais amigável
+    snr_raw = (rssi_raw + 105.0) / 3.0 + rng.normal(0.0, 1.0, size=n_amostras)
+
+    df = pd.DataFrame(
+        {
+            "distance_real": distance_real,
+            "rssi_raw": rssi_raw,
+            "snr_raw": snr_raw,
+        }
+    )
+
     return df
 
+
+def treinar_regressor_rf(df: pd.DataFrame) -> RandomForestRegressor:
+    """
+    Treina um RandomForestRegressor usando o dataset sintético.
+    Aqui a ideia é o modelo aprender a relação distância x sinal
+    que foi imposta pela simulação.
+    """
+
+    # Se quiser usar RSSI + SNR, é só colocar as duas colunas aqui.
+    features = ["snr_raw"]
+    target = "distance_real"
+
+    X = df[features].values
+    y = df[target].values
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.2,
+        random_state=42,
+    )
+
+    reg = RandomForestRegressor(
+        n_estimators=200,
+        random_state=42,
+        n_jobs=-1,
+    )
+
+    reg.fit(X_train, y_train)
+
+    # Avaliação rápida só para ter ideia do erro
+    y_pred = reg.predict(X_test)
+    mae = np.mean(np.abs(y_pred - y_test))
+    rmse = np.sqrt(np.mean((y_pred - y_test) ** 2))
+
+    ss_res = np.sum((y_test - y_pred) ** 2)
+    ss_tot = np.sum((y_test - np.mean(y_test)) ** 2)
+    r2 = 1.0 - ss_res / ss_tot
+
+    print("===== TREINO REGRESSOR RF (SIMULAÇÃO) =====")
+    print(f"MAE   (erro médio absoluto): {mae:.3f}")
+    print(f"RMSE (raiz do erro quadrático médio): {rmse:.3f}")
+    print(f"R²    (coeficiente de determinação): {r2:.4f}")
+    print("============================================")
+
+    return reg
+
+
+def main():
+    # Gera dataset sintético
+    df = gerar_dataset_rf(
+        n_amostras=5000,
+        distancia_max=300.0,
+        seed=42,
+    )
+
+    # Salva o CSV para análise e para a etapa de avaliação
+    CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(CSV_PATH, index=False)
+    print(f"Dataset sintético salvo em: {CSV_PATH}")
+
+    # Treina o regressor em cima desse dataset
+    regressor = treinar_regressor_rf(df)
+
+    # Salva o modelo na raiz de models/
+    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(regressor, MODEL_PATH)
+    print(f"Modelo de regressão RF salvo em: {MODEL_PATH}")
+
+
 if __name__ == "__main__":
-    # 1. GERAR BASE
-    df = gerar_dados_treino_tcc()
-
-    # Salva o CSV para documentacao
-    csv_path = CURRENT_DIR / "dataset_rf_simulado.csv"
-    df.to_csv(csv_path, index=False)
-    print(f"Dataset salvo em: {csv_path}")
-
-    # 2. PREPARAR
-    X = df[['rssi', 'snr']]
-    y = df['distancia']
-
-    # Separa 80% Treino / 20% Teste
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    # 3. TREINAR
-    print("Treinando Random Forest (Otimizado)...")
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-
-    # 4. VALIDAR (METRICAS PARA O TCC)
-    y_pred = model.predict(X_test)
-
-    mae = mean_absolute_error(y_test, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    r2 = r2_score(y_test, y_pred)
-
-    print("\n" + "="*50)
-    print("RELATORIO DE PERFORMANCE (CENARIO CAMPO ABERTO)")
-    print("="*50)
-    print(f"Erro Medio Absoluto (MAE):  {mae:.2f} metros")
-    print(f"Erro Quadratico Medio (RMSE): {rmse:.2f} metros")
-    print(f"Coeficiente R2 (Precisao):  {r2:.4f}")
-    print("="*50 + "\n")
-
-    # 5. GERAR GRAFICO
-    plt.figure(figsize=(10, 6))
-    plt.scatter(y_test, y_pred, alpha=0.5, s=10, color='blue', label='Predicoes')
-    plt.plot([0, 2000], [0, 2000], 'r--', lw=2, label='Ideal')
-    plt.xlabel("Distancia Real (m)")
-    plt.ylabel("Distancia Predita (m)")
-    plt.title(f"Validacao do Modelo RF - Campo Aberto (R2 = {r2:.2f})")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(CURRENT_DIR / "grafico_performance_rf.png")
-    print("Grafico salvo.")
-
-    # 6. SALVAR MODELO
-    output_path = MODELS_DIR / "drone_rf_regressor.pkl"
-    joblib.dump(model, output_path)
-    print(f"Modelo salvo em: {output_path}")
+    main()

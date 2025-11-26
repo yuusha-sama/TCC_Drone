@@ -8,11 +8,8 @@ from typing import Dict
 
 class RFDetectorSim:
     """
-    SIMULADOR DE VOO COM ROTEIRO (SCRIPTED FLIGHT).
-    Em vez de andar aleatoriamente, o drone segue fases claras:
-    1. APROXIMACAO (Longe -> Perto)
-    2. PAIRANDO (Fica parado perto -> Perigo)
-    3. RETIRADA (Perto -> Longe)
+    SIMULADOR DE VOO COM ROTEIRO, so para demonstracao claro.
+    Em vez de andar aleatoriamente, o drone segue fases claras, e respectivas como:APROXIMACAO, PAIRANDO e RETIRADA 
     """
 
     def __init__(self, model_path: Path):
@@ -59,7 +56,6 @@ class RFDetectorSim:
 
     def _simulation_loop(self):
         print("RF: Iniciando Roteiro de Voo...")
-        
         while self.running:
             # 1. LÓGICA DE MOVIMENTO (ROTEIRO)
             velocidade = 30 # m/s (Rápido)

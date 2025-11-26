@@ -9,8 +9,8 @@ import serial
 
 class RFDetectorReal:
     """
-    DETECTOR RF REAL (HARDWARE VIA USB).
-    Conecta na porta Serial (COM3/ttyUSB0) e le dados reais do Dongle.
+    DETECTOR RF REAL, ou quase, tenta ser mas nao deu.
+    Conecta na porta USB e le dados reais do Dongle.
     """
 
     def __init__(self, model_path: Path, port: str = "COM3", baudrate: int = 115200):
