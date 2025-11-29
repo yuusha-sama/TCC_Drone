@@ -17,10 +17,8 @@ def extract_mfcc_from_file(
     Extrai MFCC de um arquivo .wav e retorna um vetor de features fixo
     (média + desvio padrão de cada coeficiente).
     """
-    # Carrega o áudio como mono já reamostrado
     y, sr = librosa.load(str(path), sr=target_sr, mono=True)
 
-    # Matriz MFCC [n_mfcc x n_frames]
     mfcc = librosa.feature.mfcc(
         y=y,
         sr=sr,
@@ -29,11 +27,9 @@ def extract_mfcc_from_file(
         hop_length=hop_length,
     )
 
-    # Estatísticas ao longo do tempo
     mfcc_mean = mfcc.mean(axis=1)
     mfcc_std = mfcc.std(axis=1)
 
-    # Vetor final = [means, stds]
     features = np.concatenate([mfcc_mean, mfcc_std])
 
     return features.astype(np.float32)

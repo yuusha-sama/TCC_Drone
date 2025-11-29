@@ -8,7 +8,7 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("🎧 Dataset de Áudio - Drones")
+st.title("Dataset de Áudio - Drones")
 st.write("Arquivos .wav organizados no MongoDB Atlas (metadados) + player local.")
 
 collection = get_kb_collection()

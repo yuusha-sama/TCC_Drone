@@ -3,7 +3,7 @@ from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 
 # === CONFIGURAÇÃO DO MONGO ATLAS ===
-# ⚠️ Cuidado para não commitar essa senha no GitHub.
+#Cuidado para não commitar essa senha no GitHub.
 MONGO_URI = (
     "mongodb+srv://Drone_db:drones@cluster0.zkrzaft.mongodb.net/"
     "?appName=Cluster0"
@@ -36,6 +36,6 @@ if __name__ == "__main__":
     try:
         client = get_mongo_client()
         client.admin.command("ping")
-        print("✅ Conectado com sucesso ao MongoDB Atlas!")
+        print("Conectado com sucesso ao MongoDB Atlas!")
     except Exception as e:
-        print("❌ Erro ao conectar no MongoDB:", e)
+        print("Erro ao conectar no MongoDB:", e)

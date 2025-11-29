@@ -38,7 +38,7 @@ def carregar_dados():
         try:
             features = extract_mfcc_from_file(caminho_abs)
         except Exception as e:
-            print(f"⚠️ Erro extraindo MFCC de {caminho_abs}: {e}")
+            print(f"Erro extraindo MFCC de {caminho_abs}: {e}")
             continue
 
         X.append(features)
@@ -94,7 +94,7 @@ def treinar_modelo():
 
     model_path = models_dir / "drone_mfcc_rf.pkl"
     joblib.dump(clf, model_path)
-    print(f"\n✅ Modelo salvo em: {model_path}")
+    print(f"\nModelo salvo em: {model_path}")
 
 
 if __name__ == "__main__":

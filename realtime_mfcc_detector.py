@@ -6,9 +6,8 @@ from collections import deque
 
 from DB.audio_mfcc_utils import extract_mfcc_from_buffer
 
-# Mesmo sample rate do treino
 SAMPLE_RATE = 16000
-BLOCK_DURATION = 1.0           # segundos analisados por vez
+BLOCK_DURATION = 1.0           
 BLOCK_SIZE = int(SAMPLE_RATE * BLOCK_DURATION)
 
 MODEL_PATH = "models/drone_mfcc_rf.pkl"
@@ -16,8 +15,6 @@ clf = joblib.load(MODEL_PATH)
 
 DRONE_LABEL = "Drone"
 
-# ===== AJUSTES DE DECISÃO =====
-# agora limite de ~20% pra detectar
 DRONE_AVG_THRESHOLD = 0.20     # média das últimas probabilidades
 DRONE_STRONG_THRESHOLD = 0.50  # prob atual bem alta já força detecção
 PROB_HISTORY_SIZE = 5          # quantos blocos entram na média

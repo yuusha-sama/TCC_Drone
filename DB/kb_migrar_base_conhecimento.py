@@ -55,12 +55,6 @@ def extrair_info_wav(path: Path) -> Dict[str, Any]:
 def arquivo_para_documento(path: Path, base_dir: Path) -> Dict[str, Any]:
     """
     Converte um arquivo .wav em um documento para o MongoDB.
-
-    - classe: primeira pasta depois da base (ex: Drone, unknown)
-    - arquivo: nome do arquivo
-    - caminho_relativo: caminho relativo à pasta base
-    - caminho_absoluto: caminho completo no disco
-    - + metadados do .wav
     """
     rel_path = path.relative_to(base_dir)
 
@@ -96,7 +90,7 @@ def migrar_base():
     """
     collection = get_kb_collection()
 
-    print(f"📂 Lendo arquivos em: {BASE_DIR}")
+    print(f"Lendo arquivos em: {BASE_DIR}")
     arquivos = listar_arquivos_base(BASE_DIR)
     print(f"Encontrados {len(arquivos)} arquivo(s) .wav.")
 
@@ -111,7 +105,7 @@ def migrar_base():
         try:
             doc = arquivo_para_documento(path, BASE_DIR)
         except Exception as e:
-            print(f"⚠️ Erro ao processar {path}: {e}")
+            print(f"Erro ao processar {path}: {e}")
             continue
 
         result = collection.update_one(
